@@ -232,10 +232,34 @@
     let cart = [];
     let currentUser = null;
 
-    // ২. লগইন সেশন স্থায়ী করা (Persistence)
     setPersistence(auth, browserLocalPersistence);
 
-    // ৩. লগইন স্ট্যাটাস চেক করা
+    // ২. ইমেজ কম্প্রেশন ফাংশন (ছবি ৫০ KB-র আশেপাশে রাখবে)
+    async function compressImage(file) {
+        return new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = (event) => {
+                const img = new Image();
+                img.src = event.target.result;
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    const maxWidth = 400; // সাইজ ছোট রাখা হয়েছে
+                    const scaleSize = maxWidth / img.width;
+                    canvas.width = maxWidth;
+                    canvas.height = img.height * scaleSize;
+
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    
+                    // কোয়ালিটি ০.৫ দিলে সাইজ অনেক কমে যায় (প্রায় ২০-৪০ KB হবে)
+                    resolve(canvas.toDataURL('image/jpeg', 0.5));
+                };
+            };
+        });
+    }
+
+    // ৩. লগইন চেক
     onAuthStateChanged(auth, (user) => {
         currentUser = user;
         const btn = document.getElementById('admin-nav-btn');
@@ -251,7 +275,7 @@
         }
     });
 
-    // ৪. লগইন ফাংশন
+    // ৪. লগইন লজিক
     document.getElementById('btn-login').onclick = () => {
         const email = document.getElementById('login-email').value;
         const pass = document.getElementById('login-pass').value;
@@ -260,48 +284,27 @@
             .catch(() => alert("ভুল ইমেইল বা পাসওয়ার্ড!"));
     };
 
-    // ৫. লগআউট ফাংশন
     document.getElementById('logout-btn').onclick = () => {
-        if(confirm("লগআউট করতে চান?")) {
-            signOut(auth).then(() => { alert("লগআউট হয়েছে!"); showTab('home'); });
-        }
+        if(confirm("লগআউট করতে চান?")) signOut(auth).then(() => showTab('home'));
     };
 
-    // ৬. ট্যাব সুইচ লজিক
+    // ৫. ট্যাব ও ক্যালকুলেটর
     window.showTab = function(id) {
         document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-        document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active-tab'));
-        
         document.getElementById(id).classList.add('active');
-        if(document.getElementById('btn-'+id)) document.getElementById('btn-'+id).classList.add('active-tab');
-        
         document.getElementById('bill-date').innerText = new Date().toLocaleDateString('bn-BD');
         renderApp();
     };
 
-    // আপগ্রেডেড ক্যালকুলেটর লজিক
-window.calculateAdvancedPrice = function() {
-    // ইনপুট থেকে ভ্যালু নেওয়া
-    let totalPrice = parseFloat(document.getElementById('calc-total-price').value) || 0;
-    let qty = parseFloat(document.getElementById('calc-qty').value) || 0;
+    window.calculateAdvancedPrice = function() {
+        let price = parseFloat(document.getElementById('calc-total-price').value) || 0;
+        let qty = parseFloat(document.getElementById('calc-qty').value) || 0;
+        document.getElementById('res-per-kg').innerText = qty > 0 ? (price / qty).toFixed(2) : "0";
+        document.getElementById('res-per-100g').innerText = qty > 0 ? (price / qty / 10).toFixed(2) : "0";
+        document.getElementById('res-half').innerText = (price / 2).toFixed(2);
+    };
 
-    let perKg = 0;
-    let per100g = 0;
-    let halfPrice = totalPrice / 2;
-
-    // যদি কেজি ০ এর বেশি হয় তবেই হিসাব হবে
-    if (qty > 0) {
-        perKg = totalPrice / qty;
-        per100g = perKg / 10;
-    }
-
-    // রেজাল্ট দেখানো (দশমিকের পর ২ ঘর পর্যন্ত)
-    document.getElementById('res-per-kg').innerText = perKg.toFixed(2);
-    document.getElementById('res-per-100g').innerText = per100g.toFixed(2);
-    document.getElementById('res-half').innerText = halfPrice.toFixed(2);
-};
-
-    // ৮. Firebase থেকে রিয়েল-টাইম ডেটা আনা
+    // ৬. Firebase ডাটা লোড (টেক্সট আগে লোড হবে)
     onValue(productsRef, (snapshot) => {
         const data = snapshot.val();
         products = [];
@@ -309,120 +312,88 @@ window.calculateAdvancedPrice = function() {
         renderApp();
     });
 
-    // ৯. নতুন মাল যোগ করা (অ্যাডমিন) - ক্যামেরা সাপোর্ট ও লোডিং সহ
-document.getElementById('add-btn').onclick = function() {
-    if(!currentUser) return alert("দয়া করে আগে লগইন করুন!");
-    
-    const name = document.getElementById('p-name').value;
-    const price = document.getElementById('p-price').value;
-    const unit = document.getElementById('p-unit').value;
-    const fileInput = document.getElementById('p-image');
-    const file = fileInput.files[0];
-    const btn = document.getElementById('add-btn');
+    // ৭. নতুন মাল যোগ (Compression সহ)
+    document.getElementById('add-btn').onclick = async function() {
+        if(!currentUser) return alert("লগইন করুন!");
+        const name = document.getElementById('p-name').value;
+        const price = document.getElementById('p-price').value;
+        const unit = document.getElementById('p-unit').value;
+        const file = document.getElementById('p-image').files[0] || document.getElementById('p-camera').files[0];
+        const btn = document.getElementById('add-btn');
 
-    if(!name || !price) return alert("মালের নাম ও দাম অবশ্যই দিতে হবে!");
+        if(!name || !price) return alert("তথ্য দিন");
+        
+        btn.innerText = "সেভ হচ্ছে...";
+        btn.disabled = true;
 
-    // বাটন লোডিং স্টেট (যাতে বারবার ক্লিক না হয়)
-    const originalBtnText = btn.innerText;
-    btn.innerText = "সেভ হচ্ছে...";
-    btn.disabled = true;
+        let imgData = "";
+        if(file) imgData = await compressImage(file);
 
-    // Firebase-এ সেভ করার মেইন ফাংশন
-    const saveToFirebase = (imgBase64 = '') => {
-        push(productsRef, { 
-            name: name, 
-            price: parseFloat(price), 
-            unit: unit, 
-            image: imgBase64, 
-            visible: true 
-        }).then(() => {
-            alert("মাল সফলভাবে যোগ হয়েছে!");
-            
-            // ফর্ম ক্লিয়ার করা
+        push(productsRef, { name, price: parseFloat(price), unit, image: imgData, visible: true })
+        .then(() => {
+            alert("সফলভাবে সেভ হয়েছে!");
             document.getElementById('p-name').value = '';
             document.getElementById('p-price').value = '';
-            fileInput.value = '';
-            
-            // বাটন স্বাভাবিক করা
-            btn.innerText = originalBtnText;
-            btn.disabled = false;
-        }).catch((error) => {
-            alert("সেভ করতে সমস্যা হয়েছে: " + error.message);
-            btn.innerText = originalBtnText;
+            btn.innerText = "সেভ করুন";
             btn.disabled = false;
         });
     };
 
-    // যদি ছবি থাকে তবে রিডার দিয়ে পড়া হবে
-    if(file) { 
-        const reader = new FileReader(); 
-        reader.onload = (e) => saveToFirebase(e.target.result); 
-        reader.readAsDataURL(file); 
-    } else {
-        // ছবি না থাকলে শুধু নাম ও দাম সেভ হবে
-        saveToFirebase('');
-    }
-};
-
-    // ১০. ডিলিট ও হাইড লজিক
+    // ৮. ডিলিট ও হাইড
     window.delP = (id) => { if(currentUser && confirm("ডিলিট করবেন?")) remove(ref(db, 'products/'+id)); };
     window.toggleV = (id) => { 
-        if(!currentUser) return;
         const p = products.find(i => i.id === id);
-        update(ref(db, 'products/'+id), { visible: !p.visible });
+        if(currentUser) update(ref(db, 'products/'+id), { visible: !p.visible });
     };
 
-    // ১১. UI রেন্ডার করা (সার্চিং সহ)
+    // ৯. UI রেন্ডার (Lazy Loading Feel)
     window.renderApp = function() {
         const hS = document.getElementById('search-home').value.toLowerCase();
         const bS = document.getElementById('search-billing').value.toLowerCase();
 
-        // হোম পেজ লিস্ট
+        // হোম লিস্ট
         const hList = document.getElementById('home-list'); 
         hList.innerHTML = '';
         products.filter(p => p.visible && p.name.toLowerCase().includes(hS)).forEach(p => {
-            hList.innerHTML += `<div class="bg-white p-2 rounded-xl shadow-sm text-center border"><img src="${p.image || 'https://via.placeholder.com/80'}" class="h-20 w-full object-cover rounded-lg mb-1"><p class="font-bold text-xs">${p.name}</p><p class="text-indigo-600 font-black text-sm">₹ ${p.price}/${p.unit}</p></div>`;
+            hList.innerHTML += `
+                <div class="bg-white p-2 rounded-xl shadow-sm text-center border">
+                    <img src="${p.image || ''}" loading="lazy" class="h-20 w-full object-cover rounded-lg mb-1 bg-gray-100" alt="..">
+                    <p class="font-bold text-xs">${p.name}</p>
+                    <p class="text-indigo-600 font-black text-sm">₹ ${p.price}/${p.unit}</p>
+                </div>`;
         });
 
-        // অ্যাডমিন লিস্ট টেবিল
+        // অ্যাডমিন টেবিল
         const aTable = document.getElementById('admin-table-body'); 
         aTable.innerHTML = '';
         products.forEach(p => {
-            aTable.innerHTML += `<tr class="border-b text-sm"><td class="p-4 font-bold">${p.name}</td><td class="p-4">₹ ${p.price}/${p.unit}</td><td class="p-4 text-right"><button onclick="toggleV('${p.id}')" class="px-2 py-1 rounded ${p.visible ? 'bg-orange-100 text-orange-600' : 'bg-green-100 text-green-600'} font-bold">${p.visible?'Hide':'Show'}</button> <button onclick="delP('${p.id}')" class="bg-red-100 text-red-600 px-2 py-1 rounded font-bold ml-1">Del</button></td></tr>`;
+            aTable.innerHTML += `<tr class="border-b text-sm"><td class="p-4 font-bold">${p.name}</td><td class="p-4">₹ ${p.price}</td><td class="p-4 text-right"><button onclick="toggleV('${p.id}')" class="px-2 py-1 rounded ${p.visible ? 'bg-orange-100' : 'bg-green-100'}">${p.visible?'Hide':'Show'}</button> <button onclick="delP('${p.id}')" class="bg-red-100 text-red-600 px-2 py-1 rounded ml-1">Del</button></td></tr>`;
         });
 
-        // বিলিং সিলেকশন লিস্ট
+        // বিলিং লিস্ট
         const bList = document.getElementById('billing-product-list'); 
         bList.innerHTML = '';
         products.filter(p => p.visible && p.name.toLowerCase().includes(bS)).forEach(p => {
-            bList.innerHTML += `<button onclick="addToCart('${p.id}')" class="bg-white p-3 text-left border rounded-xl shadow-sm hover:border-green-500 font-bold text-sm text-slate-800">${p.name}<div class="text-[10px] text-slate-400 uppercase font-black">₹ ${p.price}/${p.unit}</div></button>`;
+            bList.innerHTML += `<button onclick="addToCart('${p.id}')" class="bg-white p-3 text-left border rounded-xl shadow-sm hover:border-green-500 font-bold text-sm">
+                ${p.name}<div class="text-[10px] text-slate-400 font-black uppercase">₹ ${p.price}/${p.unit}</div>
+            </button>`;
         });
-        
-        // রি-রেন্ডার না করে শুধু কার্ট টেবিল আপডেট
         updateBillTable();
     };
 
-    // ১২. বিলিং ও দশমিক ওজন হ্যান্ডলিং (FIXED)
+    // ১০. বিলিং ও দশমিক ওজন (FIXED)
     window.addToCart = (pid) => { 
         const p = products.find(i => i.id === pid); 
         cart.push({...p, cartId: Date.now(), qty: 1, total: p.price.toFixed(2)}); 
         updateBillTable(); 
     };
 
-    // এই ফাংশনটি দশমিক টাইপ করার সময় ইনপুট বক্সকে স্থির রাখে
     window.updateQty = (id, val) => { 
         const item = cart.find(x => x.cartId === id); 
         if(!item) return;
-
-        item.qty = val; // টাইপ করা ভ্যালু স্ট্রিং হিসেবে রাখা হচ্ছে
-        let nQty = parseFloat(val) || 0;
-        item.total = (item.price * nQty).toFixed(2); 
-        
-        // শুধু ওই লাইনের দাম আপডেট করা
-        const priceSpan = document.getElementById(`total-${id}`);
-        if(priceSpan) priceSpan.innerText = item.total;
-        
-        // গ্র্যান্ড টোটাল আপডেট
+        item.qty = val;
+        item.total = (item.price * (parseFloat(val) || 0)).toFixed(2); 
+        document.getElementById(`total-${id}`).innerText = item.total;
         let gt = 0;
         cart.forEach(x => gt += parseFloat(x.total));
         document.getElementById('grand-total').innerText = gt.toFixed(2);
@@ -430,52 +401,36 @@ document.getElementById('add-btn').onclick = function() {
 
     window.updateBillTable = () => {
         const b = document.getElementById('cart-body'); 
-        let gt = 0; 
-        b.innerHTML = '';
+        let gt = 0; b.innerHTML = '';
         cart.forEach(i => { 
             gt += parseFloat(i.total); 
             b.innerHTML += `
                 <tr class="border-b">
-                    <td class="py-4 font-bold text-xs">${i.name}<br><span class="text-[9px] text-gray-400 font-normal">@ ${i.price}/${i.unit}</span></td>
+                    <td class="py-4 font-bold text-xs">${i.name}</td>
                     <td class="text-center py-4">
                         <input type="number" step="any" value="${i.qty}" oninput="updateQty(${i.cartId}, this.value)" class="qty-input no-print font-bold text-indigo-700">
-                        <span class="hidden print:inline font-bold">${i.qty}</span> 
-                        <span class="text-[10px] uppercase font-bold text-gray-400 ml-1">${i.unit}</span>
+                        <span class="hidden print:inline">${i.qty}</span> ${i.unit}
                     </td>
-                    <td class="text-right font-black text-sm text-slate-800">₹ <span id="total-${i.cartId}">${i.total}</span></td>
-                    <td class="no-print text-right"><button onclick="removeCartItem(${i.cartId})" class="text-red-400 text-2xl font-bold px-2">×</button></td>
+                    <td class="text-right font-black text-sm">₹ <span id="total-${i.cartId}">${i.total}</span></td>
+                    <td class="no-print text-right"><button onclick="removeCartItem(${i.cartId})" class="text-red-400 text-2xl px-2">×</button></td>
                 </tr>`; 
         });
         document.getElementById('grand-total').innerText = gt.toFixed(2);
     };
 
-    window.removeCartItem = (id) => { 
-        cart = cart.filter(x => x.cartId !== id); 
-        updateBillTable(); 
-    };
+    window.removeCartItem = (id) => { cart = cart.filter(x => x.cartId !== id); updateBillTable(); };
+    window.clearCart = () => { if(confirm("সব মুছবেন?")) { cart = []; updateBillTable(); } };
 
-    window.clearCart = () => { 
-        if(confirm("সব মুছবেন?")) { 
-            cart = []; 
-            updateBillTable(); 
-        } 
-    };
-
-    // ১৩. হোয়াটসঅ্যাপ শেয়ার
     window.shareOnWhatsApp = () => {
-        if(cart.length === 0) return alert("কার্ট খালি!");
-        let m = `*মেমো - আপনার দোকান*\nতারিখ: ${new Date().toLocaleDateString('bn-BD')}\n----------------------------\n`;
-        cart.forEach((i, x) => {
-            m += `${x+1}. *${i.name}*\n`;
-            m += `   ${i.qty} ${i.unit} x ${i.price} = ₹${i.total}\n`;
-        });
-        m += `----------------------------\n*সর্বমোট: ₹${document.getElementById('grand-total').innerText}*\n\nধন্যবাদ, আবার আসবেন!`;
+        if(cart.length === 0) return alert("খালি!");
+        let m = `*মেমো - আপনার দোকান*\n----------------------------\n`;
+        cart.forEach((i, x) => m += `${x+1}. *${i.name}* : ${i.qty} ${i.unit} = ₹${i.total}\n`);
+        m += `----------------------------\n*মোট: ₹${document.getElementById('grand-total').innerText}*`;
         window.open(`https://wa.me/?text=${encodeURIComponent(m)}`, '_blank');
     };
 
-    // শুরুতে হোম পেজ দেখানো
     showTab('home');
-
 </script>
 </body>
+
 </html>
