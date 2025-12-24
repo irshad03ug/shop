@@ -211,214 +211,283 @@
 
     <!-- স্ক্রিপ্ট অংশ -->
     <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-        import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-        import { getDatabase, ref, push, onValue, remove, update } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+    import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+    import { getDatabase, ref, push, onValue, remove, update } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
 
-        const firebaseConfig = {
-            apiKey: "AIzaSyC_gF61oUKnwn8wa-yVMioRKhPTf8O3o8g",
-            authDomain: "mudidokan-app.firebaseapp.com",
-            projectId: "mudidokan-app",
-            storageBucket: "mudidokan-app.firebasestorage.app",
-            messagingSenderId: "109112256960",
-            appId: "1:109112256960:web:d7a2ae959790d17bc04025",
-            measurementId: "G-3VFKMPV418"
-        };
+    // ১. আপনার Firebase Config
+    const firebaseConfig = {
+        apiKey: "AIzaSyC_gF61oUKnwn8wa-yVMioRKhPTf8O3o8g",
+        authDomain: "mudidokan-app.firebaseapp.com",
+        projectId: "mudidokan-app",
+        storageBucket: "mudidokan-app.firebasestorage.app",
+        messagingSenderId: "109112256960",
+        appId: "1:109112256960:web:d7a2ae959790d17bc04025",
+        measurementId: "G-3VFKMPV418"
+    };
 
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getDatabase(app);
-        const productsRef = ref(db, 'products');
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getDatabase(app);
+    const productsRef = ref(db, 'products');
 
-        let products = [];
-        let cart = [];
-        let currentUser = null;
-        let editMode = false;
-        let editId = null;
+    let products = [];
+    let cart = [];
+    let currentUser = null;
+    let editMode = false;
+    let editId = null;
+    let isInitialLoad = true; // রিফ্রেশ হ্যান্ডেল করার জন্য
 
-        setPersistence(auth, browserLocalPersistence);
+    // সেশন স্থায়ী করার জন্য
+    setPersistence(auth, browserLocalPersistence);
 
-        // লোডিং বন্ধ করার লজিক
-        onValue(productsRef, (snapshot) => {
-            const data = snapshot.val();
-            products = [];
-            if(data) Object.keys(data).forEach(k => products.push({id: k, ...data[k]}));
-            renderApp();
-            document.getElementById('loader-overlay').style.display = 'none';
-        });
-
-        onAuthStateChanged(auth, (user) => {
-            currentUser = user;
-            const btn = document.getElementById('admin-nav-btn');
-            const logout = document.getElementById('logout-btn');
-            if (user) { btn.innerText = "ড্যাশবোর্ড ✅"; logout.classList.remove('hidden'); }
-            else { btn.innerText = "অ্যাডমিন 🔒"; logout.classList.add('hidden'); }
-        });
-
-        // ইমেজ কম্প্রেশন (৫০ KB)
-        async function compressImage(file) {
-            return new Promise((resolve) => {
-                const reader = new FileReader();
-                reader.readAsDataURL(file);
-                reader.onload = (e) => {
-                    const img = new Image();
-                    img.src = e.target.result;
-                    img.onload = () => {
-                        const canvas = document.createElement('canvas');
-                        canvas.width = 400; canvas.height = img.height * (400 / img.width);
-                        const ctx = canvas.getContext('2d');
-                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                        resolve(canvas.toDataURL('image/jpeg', 0.5));
-                    };
-                };
-            });
-        }
-
-        // লগইন লজিক
-        document.getElementById('btn-login').onclick = () => {
-            const email = document.getElementById('login-email').value;
-            const pass = document.getElementById('login-pass').value;
-            signInWithEmailAndPassword(auth, email, pass).then(() => { alert("সফল!"); showTab('admin'); }).catch(() => alert("ব্যর্থ!"));
-        };
-
-        document.getElementById('logout-btn').onclick = () => signOut(auth).then(() => { alert("লগআউট!"); showTab('home'); });
-
-        // ট্যাব সুইচ
-        window.showTab = function(id) {
-            if(id === 'admin' && !currentUser) { showTab('login'); return; }
-            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active-tab'));
-            document.getElementById(id).classList.add('active');
-            if(document.getElementById('btn-'+id)) document.getElementById('btn-'+id).classList.add('active-tab');
-            document.getElementById('bill-date').innerText = new Date().toLocaleDateString('bn-BD');
-            renderApp();
-        };
-
-        // অ্যাডমিন সেভ/আপডেট
-        document.getElementById('add-btn').onclick = async function() {
-            if(!currentUser) return alert("লগইন করুন!");
-            const name = document.getElementById('p-name').value;
-            const price = document.getElementById('p-price').value;
-            const unit = document.getElementById('p-unit').value;
-            const file = document.getElementById('p-image').files[0];
-            const btn = document.getElementById('add-btn');
-
-            if(!name || !price) return alert("তথ্য দিন");
-            btn.innerText = "অপেক্ষা করুন..."; btn.disabled = true;
-
-            let imgData = editMode ? products.find(p => p.id === editId).image : "";
-            if(file) imgData = await compressImage(file);
-
-            const data = { name, price: parseFloat(price), unit, image: imgData, visible: true };
-
-            if(editMode) {
-                update(ref(db, 'products/' + editId), data).then(() => { alert("আপডেট হয়েছে!"); resetAdminForm(); });
-            } else {
-                push(productsRef, data).then(() => { alert("সেভ হয়েছে!"); resetAdminForm(); });
-            }
-        };
-
-        window.editP = (id) => {
-            const p = products.find(i => i.id === id);
-            editMode = true; editId = id;
-            document.getElementById('p-name').value = p.name;
-            document.getElementById('p-price').value = p.price;
-            document.getElementById('p-unit').value = p.unit;
-            document.getElementById('admin-form-title').innerText = "মাল এডিট করুন";
-            document.getElementById('add-btn').innerText = "আপডেট করুন";
-            document.getElementById('cancel-edit').classList.remove('hidden');
-            window.scrollTo(0,0);
-        };
-
-        function resetAdminForm() {
-            editMode = false; editId = null;
-            document.getElementById('p-name').value = ''; document.getElementById('p-price').value = '';
-            document.getElementById('admin-form-title').innerText = "নতুন মাল যোগ করুন";
-            document.getElementById('add-btn').innerText = "সেভ করুন";
-            document.getElementById('add-btn').disabled = false;
-            document.getElementById('cancel-edit').classList.add('hidden');
-        }
-        document.getElementById('cancel-edit').onclick = resetAdminForm;
-
-        // ক্যালকুলেটর লজিক
-        window.calcWeightToPrice = () => {
-            let r = parseFloat(document.getElementById('rate-to-price').value) || 0;
-            let q = parseFloat(document.getElementById('weight-input').value) || 0;
-            let u = document.getElementById('weight-unit').value;
-            let res = (u === "kg") ? r * q : (r / 1000) * q;
-            document.getElementById('res-total-price').innerText = res.toFixed(2);
-        };
-        window.calcMoneyToWeight = () => {
-    let r = parseFloat(document.getElementById('rate-to-weight').value) || 0;
-    let m = parseFloat(document.getElementById('money-input').value) || 0;
-    
-    if(r > 0 && m > 0) {
-        let g = (m / r) * 1000; // নিখুঁত গ্রাম
-        let displayMain = "";
-        let displaySub = g.toFixed(2) + " গ্রাম (নিখুঁত)";
-
-        // যদি ১ কেজি বা তার বেশি হয়
-        if (g >= 1000) {
-            displayMain = (g / 1000).toFixed(2) + " কেজি";
+    // ২. লগইন স্ট্যাটাস চেক (অটোমেটিক)
+    onAuthStateChanged(auth, (user) => {
+        currentUser = user;
+        const btn = document.getElementById('admin-nav-btn');
+        const logout = document.getElementById('logout-btn');
+        
+        if (user) {
+            btn.innerHTML = "ড্যাশবোর্ড ✅";
+            btn.onclick = () => showTab('admin');
+            logout.classList.remove('hidden');
         } else {
-            // ১ কেজির কম হলে গ্রাম রাউন্ড করে দেখাবে
-            displayMain = Math.round(g) + " গ্রাম";
+            btn.innerHTML = "অ্যাডমিন 🔒";
+            btn.onclick = () => showTab('login');
+            logout.classList.add('hidden');
         }
 
-        // বড় লেখায় রাউন্ড করা ওজন দেখাবে
-        document.getElementById('res-total-weight').innerText = displayMain;
-        // ছোট লেখায় নিখুঁত দশমিক হিসাব দেখাবে
-        document.getElementById('res-kg-hint').innerText = displaySub;
-    } else {
-        document.getElementById('res-total-weight').innerText = "0.00";
-        document.getElementById('res-kg-hint').innerText = "রেট এবং টাকা লিখুন";
+        // প্রথমবার লোড হওয়ার সময় হোম পেজ দেখানো
+        if (isInitialLoad) {
+            showTab('home');
+            isInitialLoad = false;
+        }
+    });
+
+    // ৩. ডাটাবেস থেকে তথ্য আনা
+    onValue(productsRef, (snapshot) => {
+        const data = snapshot.val();
+        products = [];
+        if(data) Object.keys(data).forEach(k => products.push({id: k, ...data[k]}));
+        renderApp();
+        document.getElementById('loader-overlay').style.display = 'none';
+    });
+
+    // ৪. লগইন লজিক
+    document.getElementById('btn-login').onclick = () => {
+        const email = document.getElementById('login-email').value;
+        const pass = document.getElementById('login-pass').value;
+        if(!email || !pass) return alert("ইমেইল ও পাসওয়ার্ড দিন");
+        
+        signInWithEmailAndPassword(auth, email, pass)
+            .then(() => { alert("লগইন সফল!"); showTab('admin'); })
+            .catch(() => alert("ইমেইল বা পাসওয়ার্ড ভুল!"));
+    };
+
+    // ৫. লগআউট লজিক
+    document.getElementById('logout-btn').onclick = () => {
+        if(confirm("লগআউট করতে চান?")) {
+            signOut(auth).then(() => { alert("লগআউট হয়েছে!"); showTab('home'); });
+        }
+    };
+
+    // ৬. ট্যাব সুইচিং (নিরাপদ)
+    window.showTab = function(id) {
+        // যদি লগইন না থাকে তবে অ্যাডমিন পেজে যেতে দেবে না
+        if(id === 'admin' && !currentUser) {
+            showTab('login');
+            return;
+        }
+        document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active-tab'));
+        
+        document.getElementById(id).classList.add('active');
+        const activeBtn = document.getElementById('btn-'+id) || (id === 'admin' ? document.getElementById('admin-nav-btn') : null);
+        if(activeBtn) activeBtn.classList.add('active-tab');
+        
+        document.getElementById('bill-date').innerText = new Date().toLocaleDateString('bn-BD');
+        renderApp();
+    };
+
+    // ৭. ইমেজ কম্প্রেশন
+    async function compressImage(file) {
+        return new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = (e) => {
+                const img = new Image();
+                img.src = e.target.result;
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = 400; canvas.height = img.height * (400 / img.width);
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    resolve(canvas.toDataURL('image/jpeg', 0.5));
+                };
+            };
+        });
     }
-};
 
-        // রেন্ডার UI
-        window.renderApp = function() {
-            const hS = document.getElementById('search-home').value.toLowerCase();
-            const bS = document.getElementById('search-billing').value.toLowerCase();
+    // ৮. অ্যাডমিন সেভ/আপডেট
+    document.getElementById('add-btn').onclick = async function() {
+        if(!currentUser) return alert("লগইন করুন!");
+        const name = document.getElementById('p-name').value;
+        const price = document.getElementById('p-price').value;
+        const unit = document.getElementById('p-unit').value;
+        const file = document.getElementById('p-image').files[0];
+        const btn = document.getElementById('add-btn');
 
-            const hL = document.getElementById('home-list'); hL.innerHTML = '';
-            products.filter(p => p.visible && p.name.toLowerCase().includes(hS)).forEach(p => {
-                hL.innerHTML += `<div class="bg-white p-2 rounded-xl shadow-sm text-center border"><img src="${p.image || ''}" class="h-20 w-full object-cover rounded-lg mb-1 bg-gray-100"><p class="font-bold text-xs truncate">${p.name}</p><p class="text-indigo-600 font-black text-sm">₹${p.price}/${p.unit}</p></div>`;
-            });
+        if(!name || !price) return alert("নাম ও দাম দিন");
+        btn.innerText = "অপেক্ষা করুন..."; btn.disabled = true;
 
-            const aT = document.getElementById('admin-table-body'); aT.innerHTML = '';
-            products.forEach(p => {
-                aT.innerHTML += `<tr class="border-b text-sm"><td class="p-4 font-bold text-slate-700">${p.name}</td><td class="p-4">₹${p.price}/${p.unit}</td><td class="p-4 text-right flex gap-1 justify-end"><button onclick="editP('${p.id}')" class="bg-blue-100 text-blue-600 px-2 py-1 rounded font-bold">Edit</button><button onclick="toggleV('${p.id}')" class="bg-gray-100 px-2 py-1 rounded font-bold">${p.visible?'Hide':'Show'}</button><button onclick="delP('${p.id}')" class="bg-red-100 text-red-600 px-2 py-1 rounded font-bold">Del</button></td></tr>`;
-            });
+        let imgData = editMode ? products.find(p => p.id === editId).image : "";
+        if(file) imgData = await compressImage(file);
 
-            const bL = document.getElementById('billing-product-list'); bL.innerHTML = '';
-            products.filter(p => p.visible && p.name.toLowerCase().includes(bS)).forEach(p => {
-                bL.innerHTML += `<button onclick="addToCart('${p.id}')" class="bg-white p-3 text-left border rounded-xl shadow-sm font-bold text-sm">${p.name}<div class="text-[10px] text-slate-400 font-black uppercase">₹${p.price}/${p.unit}</div></button>`;
-            });
-            updateBillTable();
-        };
+        const data = { name, price: parseFloat(price), unit, image: imgData, visible: true };
 
-        window.delP = (id) => { if(currentUser && confirm("ডিলিট?")) remove(ref(db, 'products/'+id)); };
-        window.toggleV = (id) => { const p = products.find(i => i.id === id); if(currentUser) update(ref(db, 'products/'+id), { visible: !p.visible }); };
+        if(editMode) {
+            update(ref(db, 'products/' + editId), data).then(() => { alert("আপডেট হয়েছে!"); resetAdminForm(); });
+        } else {
+            push(productsRef, data).then(() => { alert("সেভ হয়েছে!"); resetAdminForm(); });
+        }
+    };
 
-        // বিলিং
-        window.addToCart = (pid) => { const p = products.find(i => i.id === pid); cart.push({...p, cartId: Date.now(), qty: 1, total: p.price.toFixed(2)}); updateBillTable(); };
-        window.updateQty = (id, val) => { const i = cart.find(x => x.cartId === id); if(i) { i.qty = val; i.total = (i.price * (parseFloat(val) || 0)).toFixed(2); document.getElementById(`total-${id}`).innerText = i.total; let gt = 0; cart.forEach(x => gt += parseFloat(x.total)); document.getElementById('grand-total').innerText = gt.toFixed(2); } };
-        window.updateBillTable = () => {
-            const b = document.getElementById('cart-body'); let gt = 0; b.innerHTML = '';
-            cart.forEach(i => { gt += parseFloat(i.total); b.innerHTML += `<tr class="border-b"><td class="py-4 font-bold text-xs">${i.name}</td><td class="text-center py-4"><input type="number" step="any" value="${i.qty}" oninput="updateQty(${i.cartId}, this.value)" class="qty-input no-print font-bold text-indigo-700"> <span class="hidden print:inline">${i.qty}</span> ${i.unit}</td><td class="text-right font-black text-sm">₹<span id="total-${i.cartId}">${i.total}</span></td><td class="no-print text-right"><button onclick="removeCartItem(${i.cartId})" class="text-red-400 text-2xl">×</button></td></tr>`; });
+    window.editP = (id) => {
+        const p = products.find(i => i.id === id);
+        editMode = true; editId = id;
+        document.getElementById('p-name').value = p.name;
+        document.getElementById('p-price').value = p.price;
+        document.getElementById('p-unit').value = p.unit;
+        document.getElementById('admin-form-title').innerText = "মাল এডিট করুন";
+        document.getElementById('add-btn').innerText = "আপডেট করুন";
+        document.getElementById('cancel-edit').classList.remove('hidden');
+        window.scrollTo(0,0);
+    };
+
+    function resetAdminForm() {
+        editMode = false; editId = null;
+        document.getElementById('p-name').value = ''; document.getElementById('p-price').value = '';
+        document.getElementById('admin-form-title').innerText = "নতুন মাল যোগ করুন";
+        document.getElementById('add-btn').innerText = "সেভ করুন";
+        document.getElementById('add-btn').disabled = false;
+        document.getElementById('cancel-edit').classList.add('hidden');
+    }
+    document.getElementById('cancel-edit').onclick = resetAdminForm;
+
+    // ৯. ক্যালকুলেটর লজিক
+    window.calcWeightToPrice = () => {
+        let r = parseFloat(document.getElementById('rate-to-price').value) || 0;
+        let q = parseFloat(document.getElementById('weight-input').value) || 0;
+        let u = document.getElementById('weight-unit').value;
+        let res = (u === "kg") ? r * q : (r / 1000) * q;
+        document.getElementById('res-total-price').innerText = res.toFixed(2);
+    };
+
+    window.calcMoneyToWeight = () => {
+        let r = parseFloat(document.getElementById('rate-to-weight').value) || 0;
+        let m = parseFloat(document.getElementById('money-input').value) || 0;
+        if(r > 0 && m > 0) {
+            let g = (m / r) * 1000;
+            document.getElementById('res-total-weight').innerText = g >= 1000 ? (g/1000).toFixed(2) + " কেজি" : Math.round(g) + " গ্রাম";
+            document.getElementById('res-kg-hint').innerText = g.toFixed(2) + " গ্রাম (নিখুঁত)";
+        }
+    };
+
+    // ১০. রেন্ডার UI
+    window.renderApp = function() {
+        const hS = document.getElementById('search-home').value.toLowerCase();
+        const bS = document.getElementById('search-billing').value.toLowerCase();
+
+        const hL = document.getElementById('home-list'); hL.innerHTML = '';
+        products.filter(p => p.visible && p.name.toLowerCase().includes(hS)).forEach(p => {
+            hL.innerHTML += `<div class="bg-white p-2 rounded-xl shadow-sm text-center border">
+                <img src="${p.image || ''}" loading="lazy" class="h-20 w-full object-cover rounded-lg mb-1 bg-gray-100">
+                <p class="font-bold text-xs truncate">${p.name}</p>
+                <p class="text-indigo-600 font-black text-sm">₹${p.price}/${p.unit}</p>
+            </div>`;
+        });
+
+        const aT = document.getElementById('admin-table-body'); aT.innerHTML = '';
+        products.forEach(p => {
+            aT.innerHTML += `<tr class="border-b text-sm">
+                <td class="p-4 font-bold text-slate-700">${p.name}</td>
+                <td class="p-4">₹${p.price}/${p.unit}</td>
+                <td class="p-4 text-right flex gap-1 justify-end">
+                    <button onclick="editP('${p.id}')" class="bg-blue-100 text-blue-600 px-2 py-1 rounded font-bold">Edit</button>
+                    <button onclick="toggleV('${p.id}')" class="bg-gray-100 px-2 py-1 rounded font-bold">${p.visible?'Hide':'Show'}</button>
+                    <button onclick="delP('${p.id}')" class="bg-red-100 text-red-600 px-2 py-1 rounded font-bold">Del</button>
+                </td>
+            </tr>`;
+        });
+
+        const bL = document.getElementById('billing-product-list'); bL.innerHTML = '';
+        products.filter(p => p.visible && p.name.toLowerCase().includes(bS)).forEach(p => {
+            bL.innerHTML += `<button onclick="addToCart('${p.id}')" class="bg-white p-3 text-left border rounded-xl shadow-sm font-bold text-sm">
+                ${p.name}<div class="text-[10px] text-slate-400 font-black uppercase">₹${p.price}/${p.unit}</div>
+            </button>`;
+        });
+        updateBillTable();
+    };
+
+    window.delP = (id) => { if(currentUser && confirm("ডিলিট করবেন?")) remove(ref(db, 'products/'+id)); };
+    window.toggleV = (id) => { 
+        if(!currentUser) return;
+        const p = products.find(i => i.id === id);
+        update(ref(db, 'products/'+id), { visible: !p.visible }); 
+    };
+
+    // ১১. বিলিং লজিক
+    window.addToCart = (pid) => { 
+        const p = products.find(i => i.id === pid); 
+        cart.push({...p, cartId: Date.now(), qty: 1, total: p.price.toFixed(2)}); 
+        updateBillTable(); 
+    };
+
+    window.updateQty = (id, val) => { 
+        const i = cart.find(x => x.cartId === id); 
+        if(i) { 
+            i.qty = val; 
+            i.total = (i.price * (parseFloat(val) || 0)).toFixed(2); 
+            // দশমিক লেখার সময় রি-রেন্ডার না করে শুধু ভ্যালু আপডেট
+            const totalSpan = document.getElementById(`total-${id}`);
+            if(totalSpan) totalSpan.innerText = i.total;
+            let gt = 0; cart.forEach(x => gt += parseFloat(x.total));
             document.getElementById('grand-total').innerText = gt.toFixed(2);
-        };
+        } 
+    };
 
-        window.removeCartItem = (id) => { cart = cart.filter(x => x.cartId !== id); updateBillTable(); };
-        window.clearCart = () => { cart = []; updateBillTable(); };
-        window.shareOnWhatsApp = () => {
-        let m = `*আপনার দোকান*\nWHATSAPP-NO\n*+91 9832052828*\nতারিখ: ${new Date().toLocaleDateString('bn-BD')}\n----------------------------\n`;
+    window.updateBillTable = () => {
+        const b = document.getElementById('cart-body'); let gt = 0; b.innerHTML = '';
+        cart.forEach(i => { 
+            gt += parseFloat(i.total); 
+            b.innerHTML += `<tr class="border-b">
+                <td class="py-4 font-bold text-xs">${i.name}</td>
+                <td class="text-center py-4">
+                    <input type="number" step="any" value="${i.qty}" oninput="updateQty(${i.cartId}, this.value)" class="qty-input no-print font-bold text-indigo-700"> 
+                    <span class="hidden print:inline">${i.qty}</span> ${i.unit}
+                </td>
+                <td class="text-right font-black text-sm">₹<span id="total-${i.cartId}">${i.total}</span></td>
+                <td class="no-print text-right"><button onclick="removeCartItem(${i.cartId})" class="text-red-400 text-2xl">×</button></td>
+            </tr>`; 
+        });
+        document.getElementById('grand-total').innerText = gt.toFixed(2);
+    };
+
+    window.removeCartItem = (id) => { cart = cart.filter(x => x.cartId !== id); updateBillTable(); };
+    window.clearCart = () => { if(confirm("সব মুছবেন?")) { cart = []; updateBillTable(); } };
+
+    // ১২. হোয়াটসঅ্যাপ মেমো
+    window.shareOnWhatsApp = () => {
+        if(cart.length === 0) return alert("কার্ট খালি!");
+        let m = `*আপনার দোকান*\n*WHATSAPP-NO: +91 9832052828*\n`;
+        m += `তারিখ: ${new Date().toLocaleDateString('bn-BD')}\n`;
+        m += `----------------------------\n`;
         cart.forEach((i, x) => m += `${x+1}. *${i.name}* : ${i.qty} ${i.unit} = ₹${i.total}\n`);
         m += `----------------------------\n*সর্বমোট: ₹${document.getElementById('grand-total').innerText}*\nধন্যবাদ, আবার আসবেন!`;
-       window.open(`https://wa.me/?text=${encodeURIComponent(m)}`, '_blank');
-        };
+        window.open(`https://wa.me/?text=${encodeURIComponent(m)}`, '_blank');
+    };
 
-        showTab('home');
-    </script>
+</script>
 </body>
 </html>
+
